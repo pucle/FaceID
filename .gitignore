@@ -58,3 +58,6 @@ Thumbs.db
 /data/
 /faceid_seed_bundle/
 '@ | Add-Content .gitignore
+
+# Private face capture and pilot data
+/pilot/
