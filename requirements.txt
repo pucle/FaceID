@@ -1,0 +1,4 @@
+numpy>=1.24
+opencv-python>=4.8        # tren may chu khong can man hinh: opencv-python-headless (nhung `--show`/`capture` can ban co GUI)
+onnxruntime>=1.16
+requests>=2.31

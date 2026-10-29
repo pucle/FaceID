@@ -1,0 +1,4 @@
+2026-10-30 00:40:58 | INFO    | gallery: 86 thanh vien, 1024 template, method=centroid tau=0.58 margin=0.00
+2026-10-30 00:40:59 | INFO    | service chay: nguon=camera fps_xu_ly=5 threads=2 session=None portal=tat (chi luu DB/CSV)
+2026-10-30 00:40:59 | INFO    | DIEM DANH: Lê Đình Phúc (202613656, CM) score=0.684 2nd=0.408 frames=3 votes=3 face=152px session=None event#1
+2026-10-30 00:41:20 | INFO    | ket thuc: 96 khung, 96 mat dat chat luong, 1 diem danh, bo qua theo ly do {}, tre TB 60 ms/khung

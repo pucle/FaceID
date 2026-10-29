@@ -1,0 +1,105 @@
+{
+  "paths": {
+    "models_dir": "models",
+    "data_dir": "data"
+  },
+  "models": {
+    "detector": "det_500m.onnx",
+    "recognizer": "w600k_mbf.onnx",
+    "det_size": [
+      640,
+      640
+    ],
+    "det_thresh": 0.5,
+    "threads": 2,
+    "tta_flip": false,
+    "pad_retry": true
+  },
+  "matching": {
+    "method": "hybrid",
+    "threshold": 0.55,
+    "margin": 0.0,
+    "topk": 2,
+    "max_templates_per_id": 12
+  },
+  "live_quality": {
+    "min_det_score": 0.6,
+    "min_face_px": 70,
+    "min_blur_var": 0.0,
+    "max_abs_yaw": 0.6,
+    "min_pitch": 0.2,
+    "max_pitch": 1.0
+  },
+  "tracking": {
+    "confirm_frames": 3,
+    "window": 8,
+    "min_vote_ratio": 0.6,
+    "iou_thr": 0.25,
+    "ttl_s": 1.5,
+    "cooldown_s": 300,
+    "fps": 5,
+    "max_faces": 4
+  },
+  "enroll": {
+    "min_det_score": 0.7,
+    "min_face_px": 120,
+    "max_second_face_ratio": 0.5,
+    "min_blur_var": 0.0,
+    "min_self_cos": 0.35,
+    "near_dup_cos": 0.97,
+    "conflict_cos": 0.5,
+    "augment": true,
+    "aug_per_sample": 3,
+    "store_crops": true,
+    "max_side": 1600,
+    "aug_weight": 0.5,
+    "pose_yaw_turn": 0.2,
+    "pose_yaw_front": 0.12,
+    "pose_pitch_up": 0.82,
+    "pose_pitch_down": 1.2,
+    "frames_per_pose": 6
+  },
+  "camera": {
+    "index": 0,
+    "width": 640,
+    "height": 480
+  },
+  "service": {
+    "session_id": null,
+    "device_id": "kiosk-1",
+    "pilot_dir": null,
+    "heartbeat_file": "heartbeat.txt",
+    "reload_gallery": true,
+    "sync_interval_s": 20,
+    "log_file": "service.log"
+  },
+  "portal": {
+    "enabled": false,
+    "base_url": "https://portal.o365hust.club",
+    "auth": {
+      "type": "bearer",
+      "token_env": "PORTAL_TOKEN",
+      "header": "Authorization",
+      "scheme": "Bearer"
+    },
+    "timeout_s": 10,
+    "verify_tls": true,
+    "hmac_secret_env": null,
+    "endpoints": {
+      "health": "GET /api/v1/health",
+      "members": "GET /api/v1/members?updated_since={since}&page={page}",
+      "sessions": "GET /api/v1/attendance/sessions?status=open",
+      "attendance": "POST /api/v1/attendance/face-events",
+      "attendance_batch": "POST /api/v1/attendance/face-events/batch",
+      "face_status": "PUT /api/v1/members/{member_id}/face-status"
+    },
+    "fields": {
+      "member_id": "mssv",
+      "name": "full_name",
+      "ban": "ban",
+      "status": "status",
+      "portal_id": "id"
+    },
+    "csv_fallback_dir": "exports"
+  }
+}
