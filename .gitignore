@@ -9,6 +9,13 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+# Private face recognition data
+crops/
+data/crops/
+
+# Local face data and database
+faceid_seed_bundle/
+data/faceid.db
 
 # Environment variables and secrets
 .env
