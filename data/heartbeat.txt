@@ -1,1 +1,0 @@
-2026-10-30T00:41:19+07:00 frames=93 events=1 fps=4.3 lat_ms=57 session=None

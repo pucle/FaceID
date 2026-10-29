@@ -51,3 +51,10 @@ uploads/
 .idea/
 .DS_Store
 Thumbs.db
+
+@'
+
+# Private Face ID data — never commit
+/data/
+/faceid_seed_bundle/
+'@ | Add-Content .gitignore
