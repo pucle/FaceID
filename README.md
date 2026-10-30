@@ -515,3 +515,7 @@ Ngưỡng/`method` luôn lấy từ `cfg["matching"]` để app và service **kh
 | ☐ | Lịch `backup` (hằng tuần) + ổ đĩa mã hoá | §8–§9 |
 | ☐ | Biển thông báo ghi hình + mẫu đồng ý dữ liệu sinh trắc | §9 |
 | ☐ | Xoá `pilot/` sau hiệu chỉnh; bỏ `--pilot-dir` khi chạy lâu dài | §3.6 |
+
+https://drive.google.com/file/d/10qXL07Axh7LM2ZW6DfroFpJbaMV49tDw/view?usp=sharing
+
+
