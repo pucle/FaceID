@@ -1,5 +1,5 @@
 @echo off
-REM Chay dich vu diem danh (Windows). Dat PORTAL_TOKEN bang `setx PORTAL_TOKEN "..."` (cua so moi) hoac sua dong duoi.
+REM Chay dich vu diem danh (Windows). Dung GPU: them  --provider cuda  (hoac directml/auto) o dong python ben duoi - xem README 2.1. Dat PORTAL_TOKEN bang `setx PORTAL_TOKEN "..."` (cua so moi) hoac sua dong duoi.
 cd /d "%~dp0.."
 if exist .venv\Scripts\activate.bat call .venv\Scripts\activate.bat
 :loop

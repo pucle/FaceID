@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import logging.handlers
 import sys
 import unicodedata
@@ -17,7 +18,8 @@ sys.path.insert(0, str(HERE))
 DEFAULT_CONFIG = {
     "paths": {"models_dir": "models", "data_dir": "data"},
     "models": {"detector": "det_500m.onnx", "recognizer": "w600k_mbf.onnx", "det_size": [640, 640], "det_thresh": 0.5,
-               "threads": 2, "tta_flip": False, "pad_retry": True},
+               "threads": 2, "tta_flip": False, "pad_retry": True,
+               "provider": "cpu", "gpu_device_id": 0},   # provider: cpu | cuda | directml | auto (xem README muc 2.1)
     # decision rule; overwritten by `manage.py calibrate --apply` or by the notebook bundle (import-seed)
     "matching": {"method": "hybrid", "threshold": 0.55, "margin": 0.0, "topk": 2, "max_templates_per_id": 12},
     # faces below these gates are SKIPPED in live mode (never guessed)
@@ -106,15 +108,24 @@ def sha256_file(p):
     return h.hexdigest()
 
 
-def load_engine(cfg, threads=None):
-    from face_id_runtime import FaceEngine
+def load_engine(cfg, threads=None, provider=None, log=None):
+    """Returns (engine, shas). Provider: argument > env FACEID_PROVIDER > config models.provider. GPU unavailable -> CPU + warning."""
+    from face_id_runtime import FaceEngine, resolve_providers
     m, md = cfg["models"], Path(cfg["paths"]["models_dir"])
     det, rec = md / m["detector"], md / m["recognizer"]
     for p in (det, rec):
         if not p.exists():
             raise FileNotFoundError(f"Thieu model {p}. Chay: python manage.py fetch-models  (hoac copy tu goi notebook)")
-    eng = FaceEngine(det, rec, tuple(m["det_size"]), m["det_thresh"], ("CPUExecutionProvider",),
+    spec = provider or os.environ.get("FACEID_PROVIDER") or m.get("provider", "cpu")
+    provs, note = resolve_providers(spec, m.get("gpu_device_id", 0))
+    eng = FaceEngine(det, rec, tuple(m["det_size"]), m["det_thresh"], tuple(provs),
                      threads if threads is not None else m["threads"], 40, m.get("pad_retry", True), tta_flip=m.get("tta_flip", False))
+    eng.provider_spec, eng.provider_note = spec, note
+    want_gpu = str(spec).lower() not in ("cpu",) and "KHONG kha dung" not in note and "khong co GPU" not in note
+    if want_gpu and not eng.on_gpu:
+        note += " | CANH BAO: ONNX Runtime da quay ve CPU (thieu CUDA/cuDNN? xem README 2.1)"
+    eng.provider_note = note
+    (log.info if log else print)(f"[engine] provider={spec}: {note} | dang dung: {eng.active_providers}") if str(spec).lower() != "cpu" else None
     return eng, dict(detector_sha256=sha256_file(det), recognizer_sha256=sha256_file(rec))
 
 

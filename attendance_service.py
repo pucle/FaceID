@@ -74,7 +74,7 @@ class Service:
     def __init__(self, cfg, args, log):
         self.cfg, self.args, self.log = cfg, args, log
         self.store = FaceStore(data_dir(cfg) / "faceid.db", data_dir(cfg) / "crops")
-        self.engine, shas = load_engine(cfg)
+        self.engine, shas = load_engine(cfg, log=log)
         ok, msg = self.store.check_models(shas)
         if not ok:
             raise SystemExit(msg)
@@ -196,7 +196,7 @@ class Service:
         th = threading.Thread(target=self.background, daemon=True); th.start()
         interval = 1.0 / max(self.cfg["tracking"]["fps"], 0.5); last = 0.0; fails = 0; reload_t = 0.0
         self.log.info(f"service chay: nguon={src.kind} fps_xu_ly={self.cfg['tracking']['fps']} threads={self.cfg['models']['threads']} "
-                      f"session={self.session_id} portal={'bat' if self.client else 'tat (chi luu DB/CSV)'}")
+                      f"provider={self.engine.active_providers['detector'][0].replace('ExecutionProvider', '')} session={self.session_id} portal={'bat' if self.client else 'tat (chi luu DB/CSV)'}")
         try:
             while not self.stop.is_set():
                 now = time.time()
@@ -244,10 +244,13 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=None); ap.add_argument("--camera", type=int, default=None)
     ap.add_argument("--source", default=None, help="thu muc anh / file video (kiem thu) thay cho camera")
+    ap.add_argument("--provider", default=None, help="cpu | cuda | directml | auto (mac dinh: config models.provider)")
     ap.add_argument("--session-id", default=None); ap.add_argument("--show", action="store_true")
     ap.add_argument("--offline", action="store_true", help="khong goi portal (chi ghi DB)"); ap.add_argument("--max-frames", type=int, default=None)
     ap.add_argument("--pilot-dir", default=None, help="luu anh khuon mat xac nhan/UNKNOWN de hieu chinh bang `manage.py calibrate probes`")
     a = ap.parse_args(argv)
+    if a.provider:
+        os.environ["FACEID_PROVIDER"] = a.provider
     cfg = load_config(a.config)
     if a.camera is not None:
         cfg["camera"]["index"] = a.camera

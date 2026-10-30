@@ -13,7 +13,9 @@
     "det_thresh": 0.5,
     "threads": 2,
     "tta_flip": false,
-    "pad_retry": true
+    "pad_retry": true,
+    "provider": "cpu",
+    "gpu_device_id": 0
   },
   "matching": {
     "method": "hybrid",

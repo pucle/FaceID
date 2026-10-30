@@ -34,6 +34,9 @@ Không có giao diện đồ hoạ: mọi thứ là dòng lệnh + một dịch 
 | `tools/mock_portal.py` | Portal giả để thử tích hợp |
 | `docs/PORTAL_API.md` | **Hợp đồng API đề xuất gửi BĐH/dev portal** |
 | `scripts/` | Khởi động tự động (Windows `.bat`, Linux systemd) |
+| `pilot/` *(tạo khi chạy)* | ảnh mặt thu bằng camera thật để hiệu chỉnh — xem **§3.6** |
+
+> Muốn viết app xung quanh hệ thống: xem **§12** (bản đồ file, cấu trúc DB, API Python, hành vi cần biết) và **§13** (danh sách triển khai).
 
 ### Dữ liệu nằm ở đâu — vì sao đổi cách lưu
 Trước đây chỉ có `gallery.npz` (gallery đã biên dịch — với phương pháp *centroid* mỗi người chỉ còn một vector): **không thể thêm/bớt một ảnh** nếu không có ảnh gốc. Nay `data/faceid.db` giữ **từng embedding**
@@ -62,6 +65,43 @@ python manage.py doctor --camera                       # kiểm tra model, DB, c
 Nếu có 2 nhãn trùng MSSV, chúng bị **gộp** (notebook đã in cảnh báo) — hãy sửa tên thư mục từ gốc.
 
 Máy i3-9100F dùng chung văn phòng: mặc định `models.threads=2`, xử lý 5 khung/giây, ≤ 4 mặt/khung. `doctor` in thời gian detect trên máy bạn; nếu > 150 ms/khung, hạ `tracking.fps` hoặc `det_size` (320×320) — nhưng đo lại độ chính xác.
+
+### 2.1 Dùng GPU (tùy chọn)
+
+Mặc định hệ thống chạy **CPU** (`models.provider = "cpu"`). Có thể chuyển sang GPU mà **không đổi dữ liệu** (DB, gallery, ngưỡng giữ nguyên): chỉ đổi nơi chạy hai model ONNX (phát hiện + nhận diện).
+
+**Có đáng dùng không?** Hai model rất nhỏ nên CPU thường đã đủ cho 1 camera (trong thử nghiệm của mình, một nhân CPU ảo xử lý khoảng 35 ms/khung có 1 mặt). GPU hữu ích khi: nhiều mặt mỗi khung, `det_size` lớn, nhiều camera, hoặc muốn **giải phóng CPU** cho máy văn phòng. Với khung nhỏ, chi phí chép dữ liệu CPU↔GPU có thể làm GPU **không nhanh hơn**. Đừng đoán — đo bằng `bench` (bên dưới).
+
+| Loại GPU | Cài gói | Giá trị `provider` | Ghi chú |
+|---|---|---|---|
+| NVIDIA | `onnxruntime-gpu` | `cuda` | cần driver mới + **CUDA 12.x và cuDNN 9.x** (bản PyPI hiện tại) |
+| Windows, mọi GPU DirectX 12 (AMD/Intel/NVIDIA) | `onnxruntime-directml` | `directml` | *chưa thử trong quá trình phát triển* |
+| tự chọn tốt nhất có sẵn | — | `auto` | CUDA > DirectML > CPU |
+
+**Cài (NVIDIA):** `onnxruntime` và `onnxruntime-gpu` **không được cài cùng nhau** (cùng tên module):
+```bash
+pip uninstall -y onnxruntime onnxruntime-gpu
+pip install "onnxruntime-gpu[cuda,cudnn]"      # kéo theo CUDA/cuDNN dạng pip (ORT >= 1.21); hoặc tự cài CUDA 12 + cuDNN 9 hệ thống
+```
+Code gọi `onnxruntime.preload_dlls()` giúp tìm CUDA/cuDNN do pip hoặc PyTorch cài sẵn. DirectML: `pip uninstall -y onnxruntime && pip install onnxruntime-directml`.
+
+**Bật** (ưu tiên: tham số dòng lệnh > biến môi trường `FACEID_PROVIDER` > `config.json`):
+```bash
+python manage.py --provider cuda doctor                 # tham số đặt TRƯỚC tên lệnh
+python attendance_service.py --provider cuda --show
+```
+hoặc ghi vào `config.json`: `"models": {"provider": "cuda", "gpu_device_id": 0}` (`gpu_device_id` = số thứ tự GPU khi có nhiều card). Với `scripts/start_service.bat`, thêm `--provider cuda` vào dòng `python attendance_service.py …`.
+
+**Kiểm tra GPU thật sự được dùng** (quan trọng — ONNX Runtime có thể *nhìn thấy* CUDA nhưng vẫn lặng lẽ quay về CPU nếu thiếu cuDNN):
+```bash
+python manage.py --provider cuda doctor      # dòng [OK] provider … dang dung=CUDAExecutionProvider ; nếu hiện CPUExecutionProvider -> [LOI]
+python manage.py bench --image khung_camera.jpg --providers cpu,cuda -n 30     # so sánh ms/khung, cột "dang dung"
+```
+`bench` in `<- quay ve CPU!` khi GPU được yêu cầu nhưng không dùng được. Log service cũng ghi `provider=CUDA` hoặc `provider=CPU` ở dòng khởi động.
+
+**An toàn:** nếu GPU không có / thiếu thư viện, hệ thống **tự dùng CPU và in cảnh báo kèm cách cài** (không dừng điểm danh). Kết quả embedding GPU và CPU chỉ khác nhau ở sai số dấu phẩy động rất nhỏ nên **không cần tính lại embedding**; để chắc chắn sau khi đổi, chạy lại `calibrate loo` (hoặc `probes`) một lần.
+
+**Notebook/Kaggle:** bước trích embedding dùng GPU nếu `onnxruntime-gpu` có sẵn (`use_cuda_for_extraction=True` mặc định). Trên Kaggle, ô đầu tiên: `!pip uninstall -y onnxruntime && pip install -q onnxruntime-gpu` rồi **Restart session**; Mục 2 sẽ ghi `CUDAExecutionProvider` vào log. Phần đo tốc độ trong notebook vẫn nhằm CPU (mục tiêu triển khai).
 
 ---
 ## 3. Quy trình hằng ngày
@@ -145,6 +185,35 @@ Cần ≥ 30 ảnh thành viên và ≥ 50 ảnh người lạ để `--apply` �
 **Cách thu ảnh thật mà không tốn công:** chạy service với `--pilot-dir pilot` (hoặc `service.pilot_dir`): mỗi lần xác nhận lưu mặt vào `pilot/<MSSV>/`, mỗi người lạ lưu vào `pilot/UNKNOWN/` (tên file ghi điểm). Sau 1–2 buổi, **BĐH duyệt**: chuyển ảnh nhận nhầm sang đúng thư mục MSSV (hoặc `UNKNOWN`), rồi `calibrate probes pilot`.
 *Lưu ý: ảnh trong `pilot/` là dữ liệu sinh trắc — thư mục này cần cùng mức bảo vệ như `data/`, và nên xoá sau khi hiệu chỉnh.*
 
+### 3.6 Thư mục `pilot/` — ảnh thu bằng camera thật (chi tiết)
+
+**Là gì:** một chức năng *thu thập ảnh* của service. Nó **không ảnh hưởng đến việc nhận diện hay điểm danh**; chỉ lưu thêm ảnh mặt ra đĩa để bạn dùng hiệu chỉnh.
+Mặc định **tắt**. Bật bằng `attendance_service.py --pilot-dir pilot` hoặc `config.json → service.pilot_dir`. (`scripts/start_service.bat` đã truyền sẵn `--pilot-dir pilot`; muốn tắt thì xoá tham số đó.)
+
+**Ghi gì, ở đâu** (code: hàm `Service.save_pilot` trong `attendance_service.py`):
+
+| Sự kiện | Đường dẫn file | Ghi chú |
+|---|---|---|
+| Điểm danh **thành công** | `pilot/<MSSV>/<YYYYmmdd_HHMMSS>.jpg` | vùng mặt từ khung camera, chừa viền 40 % mỗi phía, JPEG q92 |
+| **Người lạ** (đủ chất lượng nhưng không khớp ai, theo dõi ≥ `confirm_frames` khung) | `pilot/UNKNOWN/<YYYYmmdd_HHMMSS>_t<mã_track>_<điểm>.jpg` | **một ảnh cho mỗi lần xuất hiện** (mỗi track); điểm là điểm cao nhất với một thành viên, vd `_0.28` |
+
+Đường dẫn tương đối (`pilot`) được hiểu **theo thư mục đang chạy lệnh** — hãy chạy từ thư mục `club_face_id/` (file `.bat` đã tự `cd` vào đó), hoặc ghi đường dẫn tuyệt đối (`D:\faceid\pilot`).
+
+**Để làm gì:** đó là ảnh chụp bằng **chính camera và ánh sáng điểm danh của bạn**, loại dữ liệu mà bộ ảnh đăng ký không có. Bạn duyệt lại:
+
+* ảnh **sai người** (nhận nhầm A thành B) thì chuyển sang đúng thư mục MSSV;
+* ảnh của **người ngoài CLB** thì để ở `UNKNOWN`.
+
+Sau đó chạy `python manage.py calibrate probes pilot --apply`. Lệnh này đo tỉ lệ đúng / nhầm người / người lạ lọt trên ảnh thật rồi ghi ngưỡng mới vào `config.json`
+(cần ≥ 30 ảnh thành viên và ≥ 50 ảnh người lạ, nếu không nó từ chối ghi). Tên thư mục chỉ cần **chứa MSSV** của một thành viên đang có trong DB để được tính là ảnh thành viên; mọi thư mục khác = người lạ.
+
+**Cách dùng đúng, từng bước:**
+1. Chạy service với `--offline --pilot-dir pilot` 1–2 buổi sinh hoạt.
+2. Mở `pilot/`, xem từng thư mục MSSV: ảnh nào là người khác → kéo sang thư mục MSSV đúng (tạo thư mục mới nếu cần). Xem `pilot/UNKNOWN/`: nếu có *thành viên thật* bị coi là lạ → kéo vào thư mục MSSV của họ.
+3. `python manage.py calibrate probes pilot` (xem số liệu) rồi thêm `--apply` để ghi.
+4. Với người bị nhận nhầm/không nhận ra nhiều: thêm ảnh bằng `enroll` (§3.2) — ảnh `pilot/` cũng dùng được: `python manage.py enroll --id MSSV pilot\MSSV`.
+5. **Xoá `pilot/` sau khi xong**; khi chạy lâu dài bỏ `--pilot-dir` (thư mục này lớn dần và chứa dữ liệu sinh trắc — cần bảo vệ như `data/`).
+
 ---
 ## 4. Chạy điểm danh
 
@@ -205,6 +274,7 @@ Chỉ cần ghi các khoá muốn đổi (phần còn lại lấy mặc định,
 | Khoá | Ý nghĩa / mặc định |
 |---|---|
 | `models.threads` / `det_thresh` / `tta_flip` | luồng ONNX (2) / ngưỡng phát hiện (0.5) / flip-TTA (false) |
+| `models.provider` / `gpu_device_id` | `cpu` (mặc định) \| `cuda` \| `directml` \| `auto`; số thứ tự GPU (0) — xem §2.1 |
 | `matching.method` `threshold` `margin` `max_templates_per_id` | **do notebook/`calibrate` ghi**; `hybrid`, 12 mẫu/người |
 | `live_quality.*` | `min_face_px` 70, `min_det_score` 0.6, `max_abs_yaw` 0.6 … |
 | `tracking.*` | `confirm_frames` 3, `min_vote_ratio` 0.6, `cooldown_s` 300, `fps` 5, `max_faces` 4 |
@@ -283,7 +353,8 @@ Không có API → dùng `export-csv` cuối buổi và nhập vào portal.
 | Điểm danh trùng | `cooldown_s` quá nhỏ; hoặc portal chưa trả 409 cho trùng |
 | Portal `AUTH` | token hết hạn/sai quyền; hàng đợi vẫn giữ, sửa token rồi service tự gửi lại |
 | `enroll` loại hết ảnh | `--dry-run` để xem lý do; ảnh quá nhỏ → hạ `enroll.min_face_px`, nhưng đừng dưới ~90 |
-| CPU cao khi dùng văn phòng | `models.threads=1`, `tracking.fps=3`, `max_faces=2` |
+| CPU cao khi dùng văn phòng | `models.threads=1`, `tracking.fps=3`, `max_faces=2`; hoặc chuyển GPU (§2.1) |
+| `--provider cuda` nhưng `doctor` báo `[LOI] provider … dang dung=CPU` | chưa cài `onnxruntime-gpu` (còn `onnxruntime`), hoặc thiếu CUDA 12/cuDNN 9 (`libcudnn…so.9 cannot open`), hoặc driver cũ; gỡ cả hai gói ONNX Runtime rồi cài lại một gói GPU |
 
 ---
 ## 11. Bảng lệnh nhanh
@@ -292,6 +363,155 @@ manage.py add-member | update-member | list [--no-face|--weak N] | show | delete
 manage.py enroll | enroll-folder | capture            (các lệnh đăng ký; --dry-run, --force, --no-augment)
 manage.py import-seed | reembed | rebuild-gallery
 manage.py calibrate loo|probes DIR [--far 0.01] [--apply]
-manage.py sync-members | sync-events | export-csv | backup | doctor | fetch-models
-attendance_service.py [--show] [--offline] [--source X] [--session-id ID] [--pilot-dir D] [--camera N]
+manage.py sync-members | sync-events | export-csv | backup | doctor | bench | fetch-models
+manage.py --provider cuda|directml|auto <lệnh>          (chạy bằng GPU, xem §2.1)
+attendance_service.py [--show] [--offline] [--source X] [--session-id ID] [--pilot-dir D] [--camera N] [--provider cuda]
 ```
+
+---
+## 12. Tài liệu tham chiếu cho người viết ứng dụng
+
+Phần này dành cho việc **viết app/dashboard/bot xung quanh hệ thống** (xem điểm danh, đăng ký thành viên, nút bấm quản trị…). Có 3 cách tích hợp, từ đơn giản đến sâu:
+
+| Cách | Khi nào | Cách làm |
+|---|---|---|
+| **A. Gọi CLI** | app muốn thêm/sửa/xoá, hiệu chỉnh | chạy `python manage.py …` bằng `subprocess` (đọc stdout; **mã thoát 0 = ổn**, ≠ 0 = lỗi và thông báo ở stderr/stdout) |
+| **B. Đọc SQLite (chỉ đọc)** | dashboard xem điểm danh, danh sách thành viên | mở `data/faceid.db` ở chế độ `mode=ro`; DB dùng WAL nên đọc song song với service **không bị chặn** |
+| **C. Import Python** | app Python muốn đăng ký/khớp mặt trực tiếp | `from facestore import FaceStore`, `from enrollment import …` (ví dụ §12.4) |
+
+> Service **không mở cổng mạng nào** (không có HTTP server). Nó chỉ *gọi ra* portal (`portal.base_url`). Nếu cần API cho app web, hãy viết một lớp mỏng (Flask/FastAPI) gọi cách A/B/C ở trên, đừng cho nhiều tiến trình tự ghi tay vào các bảng.
+
+### 12.1 Bản đồ file & thư mục khi chạy
+(đường dẫn tính từ thư mục `club_face_id/`; `data_dir` = `paths.data_dir`, mặc định `data/`)
+
+| Đường dẫn | Ai ghi | Nội dung |
+|---|---|---|
+| `config.json` | người dùng / `import-seed` / `calibrate --apply` | cấu hình (xem §6). Tạo từ `config.example.json` |
+| `models/det_500m.onnx`, `models/w600k_mbf.onnx` | `fetch-models` / `import-seed` | model phát hiện + nhận diện (SHA-256 được kiểm) |
+| `data/faceid.db` (+ `-wal`, `-shm`) | `FaceStore` | **toàn bộ dữ liệu**: thành viên, mẫu mặt, sự kiện điểm danh (§12.2) |
+| `data/crops/<MSSV>/<sample_id>.jpg` | đăng ký | crop 112×112 đã căn chỉnh của mẫu `real` (để `reembed`). Mẫu `aug` không có file |
+| `data/service.log` | service | log xoay vòng (2 MB × 5) |
+| `data/heartbeat.txt` | service (mỗi `sync_interval_s`) | 1 dòng: `<ISO time> frames=… events=… fps=… lat_ms=… session=…` — dùng giám sát sống/chết |
+| `data/restart.log` | `start_service.bat` | mỗi lần tự khởi động lại |
+| `data/gallery.npz` | `manage.py rebuild-gallery` | **chỉ để xuất/kiểm tra** — service không đọc file này, nó tự biên dịch từ DB |
+| `pilot/…` | service (nếu bật) | ảnh thu để hiệu chỉnh (§3.6) |
+| `exports/diemdanh_<phiên>_<ngày>.csv` | `export-csv` | điểm danh dạng Excel (UTF-8 BOM) |
+| `backups/faceid_<ngày_giờ>.db` | `backup` | bản sao DB nhất quán |
+
+Địa chỉ mạng liên quan: portal `https://portal.o365hust.club` (cấu hình `portal.base_url`); portal giả `http://127.0.0.1:8765`; biến môi trường `PORTAL_TOKEN` (tên đổi được ở `portal.auth.token_env`); chữ ký HMAC tuỳ chọn ở biến tên trong `portal.hmac_secret_env`.
+
+### 12.2 Cơ sở dữ liệu `data/faceid.db` (SQLite)
+**`members`** — một dòng mỗi thành viên
+
+| Cột | Ý nghĩa |
+|---|---|
+| `member_id` (PK) | **MSSV**, chuỗi. Khoá nối với portal và với thư mục `crops/` |
+| `name`, `ban`, `note` | hiển thị; `ban` thường `CM/TC/SK/TT` |
+| `portal_id` | id nội bộ của portal (nếu có) |
+| `status` | `active` (vào gallery) \| `inactive` (giữ dữ liệu, không nhận diện) |
+| `created_at`, `updated_at` | ISO có múi giờ |
+
+**`samples`** — một dòng mỗi embedding
+
+| Cột | Ý nghĩa |
+|---|---|
+| `sample_id` (PK, tự tăng), `member_id` (FK, xoá thành viên → xoá mẫu) | |
+| `emb` | BLOB `float32[512]` đã chuẩn hoá L2 (2048 byte) |
+| `kind` | `real` ảnh thật · `aug` bản giả lập webcam sinh từ ảnh thật · `auto` (dành cho thêm sau) |
+| `source` | nguồn: `photo:<tên file>`, `folder:…`, `webcam:cam_thang_1`, `notebook:…`, `aug:<nguồn gốc>` |
+| `pose`, `det_score`, `face_side`, `blur`, `yaw`, `pitch` | chất lượng lúc đăng ký |
+| `crop_path` | đường dẫn tương đối trong `data/crops/` |
+| `enabled` | 0 = tạm tắt (không vào gallery) |
+
+**`events`** — điểm danh = đồng thời là **hàng đợi gửi portal** (outbox)
+
+| Cột | Ý nghĩa |
+|---|---|
+| `event_id` (PK), `idem_key` (UNIQUE) | khoá chống trùng = `sha1(phiên\|MSSV\|thiết bị\|thời điểm)[:32]`; cũng gửi lên portal làm `Idempotency-Key` |
+| `ts` | thời điểm ISO có offset múi giờ của máy (`2026-10-30T19:03:12+07:00`) |
+| `member_id`, `score`, `score2`, `frames` | ai, điểm khớp, điểm người thứ hai, số khung đã gộp |
+| `session_id`, `device_id` | phiên (có thể `NULL`), thiết bị (`service.device_id`) |
+| `synced` (0/1), `attempts`, `last_error`, `synced_at` | trạng thái gửi portal. `attempts ≥ 50` hoặc lỗi 4xx (đặt 999) → dừng thử lại |
+
+**`meta`** — `schema_version`, `recognizer_sha256`, `detector_sha256` (chống trộn embedding của hai model khác nhau).
+
+Truy vấn mẫu (chỉ đọc):
+```sql
+-- điểm danh hôm nay
+SELECT e.ts, e.member_id, m.name, m.ban, e.score, e.synced FROM events e JOIN members m USING(member_id)
+WHERE date(e.ts) = date('now','localtime') ORDER BY e.ts;
+-- ai chưa có khuôn mặt
+SELECT member_id, name FROM members WHERE status='active'
+  AND member_id NOT IN (SELECT member_id FROM samples WHERE kind='real' AND enabled=1);
+-- sự kiện chưa gửi được portal
+SELECT event_id, member_id, attempts, last_error FROM events WHERE synced=0;
+```
+**Quy tắc an toàn:** chỉ **đọc** trực tiếp bằng SQL; mọi thao tác **ghi** đi qua `manage.py` hoặc lớp `FaceStore` (nó giữ ràng buộc, xoá file crop, kiểm tra model…). Mỗi luồng/tiến trình dùng **kết nối riêng** (đối tượng SQLite không dùng chung giữa luồng).
+
+### 12.3 Hành vi cần biết khi thiết kế app
+* **Cooldown nằm trong bộ nhớ** của service (`tracking.cooldown_s`, 300 s/người). Khởi động lại service ⇒ cooldown mất ⇒ cùng một người có thể được ghi lại. Vì `idem_key` chứa thời điểm nên DB *không* tự loại → **portal/app nên loại trùng theo (MSSV, phiên)**: lần đầu thắng.
+* **Thời điểm** lấy theo đồng hồ + múi giờ máy chủ: giữ máy đồng bộ giờ (NTP).
+* **Thay đổi DB (đăng ký/sửa/xoá) có hiệu lực trong ≤ 3 giây** với service đang chạy; nó chỉ biên dịch lại gallery khi nội dung thành viên/mẫu thật sự đổi.
+* Thành viên `inactive`, hoặc `active` nhưng **chưa có mẫu**, không nằm trong gallery (không bao giờ được nhận diện). `manage.py list --no-face` liệt kê nhóm sau.
+* Hàng đợi gửi portal chạy trong luồng nền; khi tắt service có một lần gửi cuối. Sự kiện bị portal từ chối vĩnh viễn (422…) nằm lại với `last_error` — app nên hiển thị cho BĐH.
+* **Quyết định điểm danh** (xem §4) là bất đồng bộ qua nhiều khung: app đừng kỳ vọng kết quả tức thì ở khung đầu; thường mất ~0.6–1 s (3 khung ở 5 khung/s).
+
+### 12.4 API Python (cách C)
+Chạy từ thư mục `club_face_id/` (hoặc thêm nó vào `sys.path`).
+```python
+from common import load_config, data_dir, load_engine, read_image
+from facestore import FaceStore
+import enrollment
+
+cfg   = load_config("config.json")
+store = FaceStore(data_dir(cfg) / "faceid.db", data_dir(cfg) / "crops")      # mỗi luồng một đối tượng
+eng, shas = load_engine(cfg)                                                  # nạp model
+ok, msg = store.check_models(shas)                                            # PHẢI True trước khi thêm/khớp embedding
+
+# --- thành viên ---
+store.add_member("20252345", "Nguyễn Văn A", "CM")                            # ValueError nếu đã có (upsert=True để ghi đè thông tin)
+store.update_member("20252345", name="Nguyễn Văn An", status="inactive")      # trường: name, ban, portal_id, status, note
+store.rename_member_id("20252345", "20252346"); store.delete_member("20252346", purge_events=False)
+store.list_members(status=None)          # [{member_id,name,ban,status,n_real,n_aug,n_auto,...}]
+
+# --- đăng ký ảnh (qua mọi lớp bảo vệ §3.1) ---
+imgs = [("a.jpg", read_image("a.jpg", cfg["enroll"]["max_side"]))]            # list[(tên, ảnh BGR)] — read_image trả None nếu không đọc được
+rep = enrollment.enroll_images(store, eng, cfg, "20252345", imgs, source="app", dry_run=False, force=False)
+rep["accepted"]   # [(tên, mô tả)]       rep["rejected"]  # [(tên, lý do)]       rep["warnings"]  # [str]
+store.samples("20252345", kinds=["real"], enabled_only=False, with_emb=False)  # danh sách mẫu; delete_samples(mid, kinds, sample_ids)
+
+# --- nhận diện một ảnh ---
+f = eng.analyse(read_image("probe.jpg"))              # mặt lớn nhất; hoặc eng.analyse_all(img, max_faces=5) -> list
+g, info = store.compile_gallery(**{k: cfg["matching"][k] for k in ("method","threshold","margin","topk")},
+                                max_templates=cfg["matching"]["max_templates_per_id"], aug_weight=cfg["enroll"]["aug_weight"])
+ident, s1, s2, why = g.match(f["emb"])               # ident = MSSV hoặc "UNKNOWN"; why ∈ ok|low_score|ambiguous|empty_gallery
+
+# --- điểm danh / portal ---
+store.add_event("20252345", score=0.87, score2=0.2, frames=3, session_id="EV1", device_id="app")   # trả None nếu trùng idem_key
+store.recent_events(20); store.pending_events(100)
+from portal_client import PortalClient, sync_events, sync_members_into_store, export_csv
+```
+Bản ghi mặt `f` (từ `analyse`/`analyse_all`) có: `status` (`ok|too_small|no_face`), `bbox[x1,y1,x2,y2]`, `kps` (10 số), `det_score`, `face_side` (px), `yaw_proxy`, `pitch_proxy`, `blur`, `emb` (float32[512]), `second_face_ratio` (nếu ≥ 2 mặt), thêm `crop` khi gọi `keep_crop=True`.
+Ngưỡng/`method` luôn lấy từ `cfg["matching"]` để app và service **khớp cùng một luật**. Muốn phiên bản đa khung như service, dùng `face_id_runtime.FaceTracker(gallery).update(faces, now)` → `(events, display)`; mỗi `event` có `identity, score, score2, frames, votes, track_id, face_side, bbox`.
+
+### 12.5 Mã thoát & lỗi thường gặp của CLI
+`manage.py` trả `0` khi thành công; thông báo lỗi dạng `sys.exit("…")` (mã `1`); `doctor` trả `1` nếu có mục `[LOI]` (tiện cho giám sát). Lỗi cần app xử lý riêng: *thiếu model* (`fetch-models`), *model lệch DB* (`reembed`), *khoá đã tồn tại* (`add-member`), *không có thành viên* (`KeyError`).
+
+---
+## 13. Triển khai — danh sách kiểm tra
+
+| ☐ | Việc | Lệnh / nơi |
+|---|---|---|
+| ☐ | Python ≥ 3.10, venv, `pip install -r requirements.txt` | §2 |
+| ☐ | Nạp seed từ notebook, model đúng SHA | `manage.py import-seed …` |
+| ☐ | `doctor --camera` toàn `[OK]` | |
+| ☐ | Đồng hồ máy đồng bộ NTP, múi giờ Việt Nam | Windows: *Date & time → Sync now* |
+| ☐ | Camera đặt đúng (§4), ánh sáng vào mặt | |
+| ☐ | Chạy thử `--offline --pilot-dir pilot` 1–2 buổi | §3.6 |
+| ☐ | Duyệt `pilot/` → `calibrate probes pilot --apply` | |
+| ☐ | Có token portal → `setx PORTAL_TOKEN …` → `portal.enabled=true` → `doctor` thấy `portal /health OK` | §7 |
+| ☐ | `sync-members` chạy được; `list --no-face` ra danh sách người cần đăng ký mặt | |
+| ☐ | Task Scheduler / systemd tự chạy `scripts/start_service.bat` | §8 |
+| ☐ | Lịch `backup` (hằng tuần) + ổ đĩa mã hoá | §8–§9 |
+| ☐ | Biển thông báo ghi hình + mẫu đồng ý dữ liệu sinh trắc | §9 |
+| ☐ | Xoá `pilot/` sau hiệu chỉnh; bỏ `--pilot-dir` khi chạy lâu dài | §3.6 |

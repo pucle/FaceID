@@ -21,6 +21,40 @@ ARCFACE_DST = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.736
 UNKNOWN = "UNKNOWN"
 
 
+def _prov_name(p):
+    return p[0] if isinstance(p, (tuple, list)) else p
+
+
+def resolve_providers(spec="cpu", device_id=0):
+    """Turn a user choice into an ONNX Runtime provider list (CPU is ALWAYS appended as fallback). Returns (providers, note).
+    spec: 'cpu' | 'cuda' | 'directml' | 'auto' (best available: CUDA > DirectML > CPU) | an explicit provider name | list of names."""
+    avail = ort.get_available_providers()
+    if isinstance(spec, (list, tuple)):
+        want = [p for p in spec if _prov_name(p) in avail]
+        return (want + ["CPUExecutionProvider"] if "CPUExecutionProvider" not in map(_prov_name, want) else want), "explicit"
+    sp = str(spec or "cpu").strip().lower()
+    table = {"cuda": "CUDAExecutionProvider", "gpu": "CUDAExecutionProvider", "directml": "DmlExecutionProvider", "dml": "DmlExecutionProvider",
+             "cpu": "CPUExecutionProvider"}
+    if sp == "auto":
+        for name in ("CUDAExecutionProvider", "DmlExecutionProvider"):
+            if name in avail:
+                sp = {v: k for k, v in table.items()}[name]; break
+        else:
+            return ["CPUExecutionProvider"], "auto: khong co GPU provider -> CPU"
+    name = table.get(sp, spec)
+    if name == "CPUExecutionProvider":
+        return ["CPUExecutionProvider"], "cpu"
+    if name not in avail:
+        hint = {"CUDAExecutionProvider": "pip uninstall -y onnxruntime && pip install onnxruntime-gpu   (NVIDIA, CUDA 12 + cuDNN 9)",
+                "DmlExecutionProvider": "pip uninstall -y onnxruntime && pip install onnxruntime-directml   (Windows, GPU DirectX 12)"}.get(name, "")
+        return ["CPUExecutionProvider"], f"'{spec}' KHONG kha dung (co: {avail}) -> dung CPU. {hint}"
+    first = (name, {"device_id": int(device_id)}) if name in ("CUDAExecutionProvider", "DmlExecutionProvider") else name
+    return [first, "CPUExecutionProvider"], f"{name} (device {device_id}) + CPU du phong"
+
+
+_PRELOADED = [False]
+
+
 def make_session(path, providers=("CPUExecutionProvider",), threads=0):
     so = ort.SessionOptions()
     if threads and threads > 0:
@@ -34,7 +68,13 @@ def make_session(path, providers=("CPUExecutionProvider",), threads=0):
     except Exception:
         pass
     avail = ort.get_available_providers()
-    prov = [p for p in providers if p in avail] or ["CPUExecutionProvider"]
+    prov = [p for p in providers if _prov_name(p) in avail] or ["CPUExecutionProvider"]
+    if any(_prov_name(p) == "CUDAExecutionProvider" for p in prov) and not _PRELOADED[0]:
+        _PRELOADED[0] = True
+        try:                            # onnxruntime-gpu >= 1.21: find CUDA/cuDNN installed by pip (nvidia-*) or by PyTorch
+            ort.preload_dlls()
+        except Exception:
+            pass
     return ort.InferenceSession(str(path), sess_options=so, providers=prov)
 
 
@@ -208,6 +248,15 @@ class FaceEngine:
         self.rec = ArcFaceEmbedder(rec_path, providers, threads)
         self.load_seconds = time.perf_counter() - t0
         self.min_face_px, self.pad_retry, self.tta_flip = min_face_px, pad_retry, bool(tta_flip)
+
+    @property
+    def active_providers(self):
+        """Providers ONNX Runtime really attached to each model (a requested GPU can silently fall back to CPU)."""
+        return dict(detector=self.det.session.get_providers(), recognizer=self.rec.session.get_providers())
+
+    @property
+    def on_gpu(self):
+        return all(p[0] != "CPUExecutionProvider" for p in self.active_providers.values())
 
     # ---- helpers ----
     def embed_crops(self, crops, tta=None):

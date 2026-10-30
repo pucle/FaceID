@@ -99,6 +99,24 @@ class MiscTests(unittest.TestCase):
         self.assertTrue((a == b).all()); self.assertFalse((a == img).all()); self.assertEqual(a.shape, img.shape)
 
 
+class ProviderTests(unittest.TestCase):
+    def test_resolution_and_cpu_fallback(self):
+        import onnxruntime as ort
+        from face_id_runtime import resolve_providers
+        real = ort.get_available_providers
+        try:
+            ort.get_available_providers = lambda: ["CPUExecutionProvider"]
+            p, note = resolve_providers("cuda"); self.assertEqual(p, ["CPUExecutionProvider"]); self.assertIn("KHONG kha dung", note)
+            self.assertEqual(resolve_providers("auto")[0], ["CPUExecutionProvider"])
+            ort.get_available_providers = lambda: ["CUDAExecutionProvider", "DmlExecutionProvider", "CPUExecutionProvider"]
+            self.assertEqual(resolve_providers("cuda", 1)[0], [("CUDAExecutionProvider", {"device_id": 1}), "CPUExecutionProvider"])
+            self.assertEqual(resolve_providers("auto")[0][0][0], "CUDAExecutionProvider")
+            self.assertEqual(resolve_providers("directml")[0][0][0], "DmlExecutionProvider")
+            self.assertEqual(resolve_providers("cpu")[0], ["CPUExecutionProvider"])
+        finally:
+            ort.get_available_providers = real
+
+
 class PortalTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

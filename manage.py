@@ -4,11 +4,13 @@
   add-member  update-member  list  show  delete-member
   enroll (anh)  enroll-folder (nhieu nguoi)  capture (webcam)  remove-samples
   import-seed (tu notebook)  reembed  calibrate loo|probes  rebuild-gallery
-  sync-members  sync-events  export-csv  backup  doctor  fetch-models
+  sync-members  sync-events  export-csv  backup  doctor  bench  fetch-models
+  (them --provider cuda|directml|auto truoc ten lenh de dung GPU, vd: manage.py --provider cuda doctor)
 """
 import argparse
 import csv
 import json
+import os
 import shutil
 import sys
 import time
@@ -186,7 +188,11 @@ def cmd_import_seed(a, cfg):
     rows = list(csv.DictReader(open(d / "seed_samples.csv", encoding="utf-8-sig")))
     assert len(rows) == len(E), "seed_samples.csv va seed_embeddings.npz lech so dong"
     rng = np.random.RandomState(0); added = dict(members=0, real=0, aug=0)
-    for r, e in zip(rows, E):
+    print(f"Nhap {len(rows)} anh (moi anh sinh them {cfg['enroll']['aug_per_sample'] if cfg['enroll']['augment'] and not a.no_augment else 0} mau gia lap webcam) - co the mat vai phut tren CPU...")
+    t0 = time.time(); st.db.execute("BEGIN")                    # ONE transaction: thousands of autocommits are very slow on HDD
+    for n_, (r, e) in enumerate(zip(rows, E), 1):
+        if n_ % 50 == 0:
+            print(f"  {n_}/{len(rows)} anh  ({time.time() - t0:.0f}s)", flush=True)
         mid = r["mssv"]
         if st.get_member(mid) is None:
             st.add_member(mid, r["name"], r["ban"] or None); added["members"] += 1
@@ -197,6 +203,7 @@ def cmd_import_seed(a, cfg):
         if crop is not None and cfg["enroll"]["augment"] and not a.no_augment:
             for ae in make_aug_embeddings(eng, crop, cfg["enroll"]["aug_per_sample"], rng):
                 st.add_sample(mid, ae, "aug", f"aug:notebook:{r['source']}", None, q, None); added["aug"] += 1
+    st.db.execute("COMMIT")
     if not a.keep_config:
         for k in ("method", "threshold", "margin", "topk"):
             if k in mc:
@@ -302,6 +309,9 @@ def cmd_doctor(a, cfg):
         t0 = time.perf_counter(); img = np.zeros((480, 640, 3), np.uint8)
         for _ in range(5):
             eng.analyse_all(img)
+        import onnxruntime as _ort
+        chk("provider", eng.provider_spec in ("cpu", "auto") or eng.on_gpu, f"yeu cau={eng.provider_spec} | dang dung={eng.active_providers['detector'][0]} | kha dung={_ort.get_available_providers()}"
+            + (f" | {eng.provider_note}" if eng.provider_spec != "cpu" else ""))
         chk("toc do detect (khung den)", True, f"{(time.perf_counter() - t0) / 5 * 1000:.0f} ms/khung")
     except Exception as e:
         chk("engine/DB", False, f"{type(e).__name__}: {e}")
@@ -317,9 +327,39 @@ def cmd_doctor(a, cfg):
     sys.exit(0 if ok else 1)
 
 
+def cmd_bench(a, cfg):
+    """Do toc do that tren may nay: CPU vs GPU. Dung --image (khung camera that) de so sanh cong bang."""
+    import statistics
+    st = open_store(cfg)
+    img = read_image(a.image, 1280) if a.image else None
+    note = ""
+    if img is None:                                          # fallback: a stored face crop pasted on a 640x480 canvas
+        for s in st.samples(kinds=["real"], enabled_only=False, with_emb=False):
+            if s["crop_path"] and (st.crops_dir / s["crop_path"]).exists():
+                crop = cv2.resize(cv2.imread(str(st.crops_dir / s["crop_path"])), (220, 220))
+                img = np.full((480, 640, 3), 128, np.uint8); img[130:350, 210:430] = crop; note = " (khung tong hop tu 1 crop)"; break
+    if img is None:
+        sys.exit("Can --image <khung camera .jpg> (hoac da co crop trong DB)")
+    print(f"Anh do: {img.shape[1]}x{img.shape[0]}{note}; {a.n} lan/provider (sau 3 lan khoi dong)")
+    print(f"{'provider':<10}{'dang dung':<26}{'mat':>4}{'TB ms':>9}{'p95 ms':>9}{'fps':>7}")
+    for spec in [x.strip() for x in a.providers.split(",") if x.strip()]:
+        eng, _ = load_engine(cfg, provider=spec)
+        for _ in range(3):
+            eng.analyse_all(img)
+        ts, nf = [], 0
+        for _ in range(a.n):
+            t0 = time.perf_counter(); nf = len(eng.analyse_all(img, max_faces=4)); ts.append((time.perf_counter() - t0) * 1000)
+        used = eng.active_providers["recognizer"][0].replace("ExecutionProvider", "")
+        tag = used + ("" if (spec.lower() == "cpu") == (used == "CPU") or spec.lower() == "auto" else "  <- quay ve CPU!")
+        print(f"{spec:<10}{tag:<26}{nf:>4}{statistics.mean(ts):>9.1f}{sorted(ts)[int(0.95 * (len(ts) - 1))]:>9.1f}{1000 / statistics.mean(ts):>7.1f}")
+    print("GPU thuong chi nhanh hon ro khi nhieu mat/khung hoac do phan giai det_size lon; model nho nen CPU van du dung. Quyet dinh theo so do tren camera that.")
+
+
+
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=None)
+    ap.add_argument("--provider", default=None, help="cpu | cuda | directml | auto  (mac dinh: config models.provider)")
     sp = ap.add_subparsers(dest="cmd", required=True)
     def P(name, fn, **kw):
         p = sp.add_parser(name, **kw); p.set_defaults(fn=fn); return p
@@ -351,11 +391,15 @@ def build_parser():
     p = P("export-csv", cmd_export_csv); p.add_argument("--out"); p.add_argument("--session")
     p = P("backup", cmd_backup); p.add_argument("--out", default="backups")
     p = P("doctor", cmd_doctor); p.add_argument("--camera", action="store_true")
+    p = P("bench", cmd_bench, help="do toc do CPU vs GPU"); p.add_argument("--image"); p.add_argument("-n", type=int, default=30)
+    p.add_argument("--providers", default="cpu,cuda", help="vd: cpu,cuda,directml")
     return ap
 
 
 def main(argv=None):
     a = build_parser().parse_args(argv)
+    if a.provider:
+        os.environ["FACEID_PROVIDER"] = a.provider
     cfg = load_config(a.config)
     if a.cmd == "calibrate" and a.mode == "probes" and not a.folder:
         sys.exit("calibrate probes can THU_MUC anh thu bang camera that")
